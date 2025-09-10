@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #111827;
+  color: #f9fafb;
+}
+
+.digit-box {
+  @apply w-12 h-12 flex items-center justify-center rounded-lg font-bold text-lg transition-all duration-300;
+}
+
+.digit-most {
+  @apply bg-green-500 text-white shadow-lg;
+}
+
+.digit-least {
+  @apply bg-red-500 text-white shadow-lg;
+}
+
+.digit-normal {
+  @apply bg-gray-700 text-gray-300;
+}

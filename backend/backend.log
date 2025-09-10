@@ -1,0 +1,31 @@
+INFO:     Started server process [32281]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50952 - "WebSocket /ws" [accepted]
+INFO:     connection closed
+INFO:     127.0.0.1:50954 - "WebSocket /ws" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:36590 - "OPTIONS /api/trading/config HTTP/1.1" 200 OK
+/home/nathan/Documents/derivpredict/backend/main.py:338: PydanticDeprecatedSince20: The `dict` method is deprecated; use `model_dump` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.11/migration/
+  logging.info(f"Trading config updated: {trading_bot.config.dict()}")
+INFO:root:Trading config updated: {'stake': 1, 'duration': 5, 'strategy': 'matches', 'selected_number': 5, 'stop_loss': 10, 'take_profit': 20, 'confidence_threshold': 65}
+/home/nathan/Documents/derivpredict/backend/main.py:339: PydanticDeprecatedSince20: The `dict` method is deprecated; use `model_dump` instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.11/migration/
+  return {"status": "success", "config": trading_bot.config.dict()}
+INFO:     127.0.0.1:36590 - "POST /api/trading/config HTTP/1.1" 200 OK
+INFO:root:Trading config updated: {'stake': 1, 'duration': 5, 'strategy': 'matches', 'selected_number': 5, 'stop_loss': 10, 'take_profit': 20, 'confidence_threshold': 70}
+INFO:     127.0.0.1:36590 - "POST /api/trading/config HTTP/1.1" 200 OK
+INFO:root:Trading config updated: {'stake': 1, 'duration': 5, 'strategy': 'matches', 'selected_number': 5, 'stop_loss': 10, 'take_profit': 20, 'confidence_threshold': 75}
+INFO:     127.0.0.1:36590 - "POST /api/trading/config HTTP/1.1" 200 OK
+INFO:root:Trading config updated: {'stake': 1, 'duration': 5, 'strategy': 'matches', 'selected_number': 5, 'stop_loss': 10, 'take_profit': 20, 'confidence_threshold': 80}
+INFO:     127.0.0.1:36590 - "POST /api/trading/config HTTP/1.1" 200 OK
+INFO:root:Trading config updated: {'stake': 1, 'duration': 5, 'strategy': 'matches', 'selected_number': 5, 'stop_loss': 10, 'take_profit': 20, 'confidence_threshold': 85}
+INFO:     127.0.0.1:36590 - "POST /api/trading/config HTTP/1.1" 200 OK
+INFO:root:Connected to Deriv API successfully
+INFO:root:Trading started in Live Trading
+INFO:     127.0.0.1:36590 - "POST /api/trading/start HTTP/1.1" 200 OK
+INFO:root:Trading stopped
+INFO:     127.0.0.1:59834 - "POST /api/trading/stop HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     connection closed
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
