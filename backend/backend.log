@@ -29,3 +29,96 @@ INFO:     127.0.0.1:59834 - "POST /api/trading/stop HTTP/1.1" 200 OK
 INFO:     Shutting down
 INFO:     connection closed
 INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/nathan/.local/lib/python3.13/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 244, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nathan/.local/lib/python3.13/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nathan/.local/lib/python3.13/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/middleware/errors.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 364, in handle
+    await self.app(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 97, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 95, in app
+    await func(session)
+  File "/home/nathan/.local/lib/python3.13/site-packages/fastapi/routing.py", line 384, in app
+    await dependant.call(**solved_result.values)
+  File "/home/nathan/Documents/derivpredict/backend/main.py", line 280, in websocket_endpoint
+    barrier: chosen_digit (string)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    if not self.api_token:
+    ^^^^^
+sqlite3.OperationalError: database is locked
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/nathan/.local/lib/python3.13/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 244, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nathan/.local/lib/python3.13/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nathan/.local/lib/python3.13/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/middleware/errors.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 364, in handle
+    await self.app(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 97, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/nathan/.local/lib/python3.13/site-packages/starlette/routing.py", line 95, in app
+    await func(session)
+  File "/home/nathan/.local/lib/python3.13/site-packages/fastapi/routing.py", line 384, in app
+    await dependant.call(**solved_result.values)
+  File "/home/nathan/Documents/derivpredict/backend/main.py", line 280, in websocket_endpoint
+    profit = 0.0
+        ^^^^^^^^
+    ...<2 lines>...
+    self.pnl += profit
+    ^^^^^
+sqlite3.OperationalError: database is locked
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [32281]
