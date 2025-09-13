@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+websockets
+numpy
+python-dotenv
+pydantic
+tensorflow-cpu
+scikit-learn
+joblib

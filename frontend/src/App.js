@@ -18,7 +18,7 @@ function App() {
   });
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8001/ws');
+    const ws = new WebSocket('ws://localhost:8000/ws');
     
     ws.onopen = () => {
       setIsConnected(true);
@@ -27,7 +27,14 @@ function App() {
     
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      setWsData(data);
+      // If real_balance is present in the message, add it to wsData
+      if (data.real_balance !== undefined) {
+        setWsData(prev => ({ ...prev, balance: data.real_balance }));
+      } else if (data.balance !== undefined) {
+        setWsData(prev => ({ ...prev, balance: data.balance }));
+      } else {
+        setWsData(data);
+      }
     };
     
     ws.onclose = () => {
@@ -47,7 +54,7 @@ function App() {
 
   const updateTradingConfig = async (newConfig) => {
     try {
-      const response = await fetch('http://localhost:8001/api/trading/config', {
+      const response = await fetch('http://localhost:8000/api/trading/config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -65,7 +72,7 @@ function App() {
 
   const startTrading = async () => {
     try {
-      await fetch('http://localhost:8001/api/trading/start', {
+      await fetch('http://localhost:8000/api/trading/start', {
         method: 'POST',
       });
     } catch (error) {
@@ -75,7 +82,7 @@ function App() {
 
   const stopTrading = async () => {
     try {
-      await fetch('http://localhost:8001/api/trading/stop', {
+      await fetch('http://localhost:8000/api/trading/stop', {
         method: 'POST',
       });
     } catch (error) {

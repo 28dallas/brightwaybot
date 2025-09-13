@@ -168,6 +168,61 @@ const TradingPanel = ({
               className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+
+          {/* AI Prediction Toggle */}
+          <div>
+            <label className="flex items-center space-x-3">
+              <input
+                type="checkbox"
+                checked={localConfig.use_ai_prediction || false}
+                onChange={(e) => handleConfigChange('use_ai_prediction', e.target.checked)}
+                className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-300">
+                Use AI Prediction (overrides selected number)
+              </span>
+            </label>
+          </div>
+
+          {/* Auto Stake Sizing */}
+          <div>
+            <label className="flex items-center space-x-3">
+              <input
+                type="checkbox"
+                checked={localConfig.auto_stake_sizing || false}
+                onChange={(e) => handleConfigChange('auto_stake_sizing', e.target.checked)}
+                className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-300">
+                Auto Stake Sizing (Kelly Criterion)
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {/* AI Status */}
+      <div className="bg-gray-800 rounded-lg p-6">
+        <h2 className="text-xl font-bold mb-4">AI Status</h2>
+        <div className="space-y-3">
+          <div className="flex justify-between">
+            <span className="text-gray-400">Model Status:</span>
+            <span className={`font-bold ${tradesData?.ai_trained ? 'text-green-400' : 'text-yellow-400'}`}>
+              {tradesData?.ai_trained ? 'Trained' : 'Training...'}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-400">Accuracy:</span>
+            <span className="font-bold text-blue-400">
+              {tradesData?.ai_accuracy?.toFixed(1) || '0.0'}%
+            </span>
+          </div>
+          <button
+            onClick={() => fetch('/api/ai/train', {method: 'POST'})}
+            className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm"
+          >
+            Retrain AI Model
+          </button>
         </div>
       </div>
 
@@ -194,8 +249,10 @@ const TradingPanel = ({
           
           <div className="text-xs text-gray-400 text-center">
             {tradingStatus ? 
-              'Auto trading is active. Trades will be placed based on predictions.' :
-              'Click to start automated trading based on AI predictions.'
+              (localConfig.use_ai_prediction ? 
+                'AI-powered trading active. Using neural network predictions.' :
+                'Manual trading active. Using selected number.') :
+              'Click to start automated trading.'
             }
           </div>
         </div>

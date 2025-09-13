@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from ai_predictor_simple import EnhancedPredictor
+from advanced_ai import UltraAdvancedPredictor
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -46,10 +48,13 @@ class TradingConfig(BaseModel):
     stake: float = 1.0
     duration: int = 1  # ticks (1 means bet next tick)
     strategy: str = "matches"  # 'matches' or 'differs'
+    selected_number: int = 5  # user's chosen digit (0-9)
     stop_loss: float = 10.0
     take_profit: float = 20.0
-    confidence_threshold: float = 20.0  # percent bias (0-100)
+    confidence_threshold: float = 60.0  # percent bias (0-100)
     min_bias_count: int = 6  # minimum occurrences in recent window to act
+    use_ai_prediction: bool = True  # Use AI prediction instead of selected number
+    auto_stake_sizing: bool = True  # Use Kelly criterion for stake sizing
 
 
 # -----------------------
@@ -147,6 +152,8 @@ class VolatilityTracker:
 
 
 tracker = VolatilityTracker()
+ai_predictor = EnhancedPredictor()
+ultra_ai = UltraAdvancedPredictor()
 
 
 # -----------------------
@@ -231,6 +238,33 @@ class DerivAPIClient:
             return data["balance"]["balance"]
         return None
 
+    async def refresh_balance_once(self):
+        """Get current balance without subscription"""
+        try:
+            return await self.get_balance()
+        except:
+            return self.balance
+
+    async def connect_and_subscribe_ticks(self):
+        """Connect to Deriv API and start tick subscription"""
+        if await self.connect():
+            # Start background task to process ticks
+            asyncio.create_task(self._process_ticks())
+            return True
+        return False
+
+    async def _process_ticks(self):
+        """Background task to process incoming ticks"""
+        async for tick_data in self.get_ticks():
+            price = float(tick_data.get("quote", 0))
+            timestamp = tick_data.get("epoch")
+            if price and timestamp:
+                # Add to tracker
+                tracker.add_tick(price, datetime.fromtimestamp(timestamp).isoformat())
+                # Check for trading opportunity
+                last_digit = int(str(price).replace(".", "")[-1])
+                await decide_and_maybe_trade(price, timestamp, last_digit)
+
 
 deriv_client = DerivAPIClient()
 
@@ -253,50 +287,39 @@ class TradingBot:
             return False
         return True
 
-    def decide_digit(self, analysis):
+    def get_contract_type(self):
         """
-        Decide which digit to target based on strategy.
-        Returns (chosen_digit:int, contract_type:str)
+        Get contract type based on strategy.
         """
         if self.config.strategy.lower() == "matches":
-            chosen = int(analysis["most_frequent"]["digit"])
-            contract_type = "DIGITMATCH"
+            return "DIGITMATCH"
         else:
-            chosen = int(analysis["least_frequent"]["digit"])
-            contract_type = "DIGITDIFF"
-        return chosen, contract_type
+            return "DIGITDIFF"
 
-    async def place_trade(self, analysis, current_digit):
-        if not self.should_trade(analysis, current_digit):
-            return None
-        contract_type = "DIGITMATCH"  # Only use DIGITMATCH
-        result = await self.client.place_digits_trade(
-            self.config.selected_number,
-            contract_type,
-            self.config.stake,
-            self.config.duration
-        )
-        # Calculate profit/loss from result (update this logic based on your actual API response)
-        profit = 0.0
-        if result and "buy" in result and "payout" in result["buy"] and "ask_price" in result["buy"]:
-            profit = float(result["buy"]["payout"]) - float(result["buy"]["ask_price"])
-        self.pnl += profit
-        # Save trade to DB
-        conn = sqlite3.connect('volatility_data.db')
-        cursor = conn.cursor()
-        now = datetime.utcnow()
-        cursor.execute(
-            "INSERT INTO trades (timestamp, strategy, prediction, stake, result, profit) VALUES (?, ?, ?, ?, ?, ?)",
-            (now, self.config.strategy, json.dumps(analysis), self.config.stake, json.dumps(result), profit)
-        )
-        conn.commit()
-        conn.close()
-        # Stop trading if stop loss or take profit is reached
-        if self.pnl <= -self.config.stop_loss or self.pnl >= self.config.take_profit:
-            self.running = False
-        # Fetch real balance from Deriv
-        real_balance = await self.client.get_balance()
-        return {"trade_result": result, "real_balance": real_balance}
+    def should_trade(self, ai_prediction, current_digit):
+        """
+        Check if we should trade based on AI prediction or selected number.
+        """
+        if self.config.use_ai_prediction:
+            # Use AI prediction
+            predicted_digit = ai_prediction['predicted_digit']
+            confidence = ai_prediction['final_confidence']
+            should_trade_ai = ai_prediction['should_trade']
+            
+            return (current_digit == predicted_digit and 
+                   confidence >= self.config.confidence_threshold and 
+                   should_trade_ai)
+        else:
+            # Use selected number (original logic)
+            return current_digit == self.config.selected_number
+    
+    def get_trade_stake(self, ai_prediction):
+        """
+        Get optimal stake size based on AI or fixed amount.
+        """
+        if self.config.auto_stake_sizing and ai_prediction.get('optimal_stake', 0) > 0:
+            return min(ai_prediction['optimal_stake'], self.config.stake * 3)
+        return self.config.stake
 
 
 trading_bot = TradingBot()
@@ -307,63 +330,80 @@ trading_bot = TradingBot()
 # -----------------------
 async def decide_and_maybe_trade(price, ts, current_digit):
     """
-    Called on each tick (from Deriv listener). Decides whether to trade and executes.
-    Behavior per your request:
-      - When strategy 'matches' -> choose most frequent digit.
-      - If the current tick's last digit equals chosen digit -> place DIGITMATCH (bets next tick will match).
-      - Use confidence thresholds and min_bias_count to avoid weak edges.
+    Called on each tick. Uses AI prediction or selected number logic.
     """
-    # Broadcast will be handled by WS endpoint; here we run decision & trade
-    analysis = tracker.get_frequency_analysis(recent_window=50)
-    if not analysis:
+    if not trading_bot.is_trading:
         return
+        
+    # Get current balance for AI calculations
+    current_balance = await deriv_client.get_balance() or 1000  # Default for demo
+    
+    # Get AI prediction
+    ai_prediction = ai_predictor.get_comprehensive_prediction(
+        list(tracker.digits), 
+        list(tracker.prices), 
+        current_balance, 
+        trading_bot.config.stake
+    )
+    
+    # Get ultra-advanced prediction
+    ultra_prediction = ultra_ai.ensemble_prediction(list(tracker.digits), list(tracker.prices))
+    
+    # Combine predictions for maximum accuracy
+    if ultra_prediction['confidence'] > ai_prediction['final_confidence']:
+        ai_prediction['predicted_digit'] = ultra_prediction['predicted_digit']
+        ai_prediction['final_confidence'] = ultra_ai.adaptive_confidence_adjustment(ultra_prediction['confidence'])
+        ai_prediction['optimal_stake'] = ultra_ai.kelly_criterion_advanced(
+            ai_prediction['final_confidence'], current_balance, []
+        )
 
     # Risk check
     if not trading_bot.check_risk_limits():
         logging.info("Risk limits hit: trading stopped.")
         return
 
-    # Determine chosen digit & contract type
-    chosen_digit, contract_type = trading_bot.decide_digit(analysis)
-
-    # Confidence and bias checks
-    confidence = analysis.get("confidence", 0)
-    recent_counts = analysis.get("recent_counts", {})
-    chosen_count = recent_counts.get(chosen_digit, 0) if isinstance(recent_counts, dict) else 0
-
-    # Only trade when confidence above threshold AND chosen digit appears at least min_bias_count times in window
-    if confidence < trading_bot.config.confidence_threshold or chosen_count < trading_bot.config.min_bias_count:
+    # Check if we should trade based on AI or selected number
+    if not trading_bot.should_trade(ai_prediction, current_digit):
         return
 
-    # Per your rule: trade only when the current tick's last digit equals chosen_digit
-    if current_digit != chosen_digit:
+    # Determine trade parameters
+    if trading_bot.config.use_ai_prediction:
+        chosen_digit = ai_prediction['predicted_digit']
+        stake = trading_bot.get_trade_stake(ai_prediction)
+    else:
+        chosen_digit = trading_bot.config.selected_number
+        stake = trading_bot.config.stake
+    
+    contract_type = trading_bot.get_contract_type()
+
+    # Don't trade if stake is 0 (AI says no trade)
+    if stake <= 0:
         return
 
-    # Place trade (ephemeral ws)
-    result = await deriv_client.place_digits_trade(chosen_digit, contract_type, trading_bot.config.stake, trading_bot.config.duration)
+    # Place trade
+    result = await deriv_client.place_digits_trade(chosen_digit, contract_type, stake, trading_bot.config.duration)
     if not result:
         logging.warning("Trade request failed or returned no response.")
         return
 
-    # Parse result to compute profit/loss (structure varies between simulated & real responses)
+    # Parse result to compute profit/loss
     profit = 0.0
     win = False
     try:
         if result.get("simulated"):
             buy = result.get("buy", {})
-            profit = float(buy.get("payout", 0.0)) - float(buy.get("ask_price", trading_bot.config.stake))
+            profit = float(buy.get("payout", 0.0)) - float(buy.get("ask_price", stake))
             win = bool(buy.get("win", False))
         else:
-            # derive from buy object
             buy = result.get("buy") or result
             payout = float(buy.get("payout", 0.0)) if buy.get("payout") else 0.0
-            ask_price = float(buy.get("ask_price", trading_bot.config.stake)) if buy.get("ask_price") else trading_bot.config.stake
+            ask_price = float(buy.get("ask_price", stake)) if buy.get("ask_price") else stake
             profit = payout - ask_price
             win = profit > 0
     except Exception as e:
         logging.error(f"Error parsing trade result: {e}")
 
-    # update bot stats
+    # Update bot stats
     trading_bot.pnl += profit
     trading_bot.total_trades += 1
     if win:
@@ -371,17 +411,17 @@ async def decide_and_maybe_trade(price, ts, current_digit):
     else:
         trading_bot.losses += 1
 
-    # persist trade
+    # Persist trade with AI data
     conn = sqlite3.connect("volatility_data.db")
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO trades (timestamp, strategy, chosen_digit, stake, duration, result, profit) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (datetime.utcnow(), trading_bot.config.strategy, chosen_digit, trading_bot.config.stake, trading_bot.config.duration, json.dumps(result), profit),
+        (datetime.utcnow(), trading_bot.config.strategy, chosen_digit, stake, trading_bot.config.duration, json.dumps({**result, 'ai_prediction': ai_prediction}), profit),
     )
     conn.commit()
     conn.close()
 
-    logging.info(f"Trade placed. Digit: {chosen_digit}, contract: {contract_type}, profit: {profit}, pnl: {trading_bot.pnl}")
+    logging.info(f"Trade placed. Digit: {chosen_digit}, contract: {contract_type}, stake: {stake}, confidence: {ai_prediction.get('final_confidence', 0):.1f}%, profit: {profit}, pnl: {trading_bot.pnl}")
 
 
 # -----------------------
@@ -402,14 +442,26 @@ async def websocket_endpoint(websocket: WebSocket):
             analysis = tracker.get_frequency_analysis(recent_window=50)
 
             # refresh balance (non-blocking call but await here to provide latest)
-            balance = await deriv_client.refresh_balance_once() if deriv_client.api_token else deriv_client.balance
+            try:
+                balance = await deriv_client.refresh_balance_once() if deriv_client.api_token else deriv_client.balance
+            except:
+                balance = deriv_client.balance
 
+            # Get AI prediction for frontend
+            ai_prediction = ai_predictor.get_comprehensive_prediction(
+                list(tracker.digits), 
+                list(tracker.prices), 
+                balance or 1000, 
+                trading_bot.config.stake
+            ) if tracker.digits and tracker.prices else None
+            
             payload = {
                 "type": "update",
                 "price": last_price,
                 "timestamp": last_ts,
                 "last_digit": last_digit,
                 "analysis": analysis,
+                "ai_prediction": ai_prediction,
                 "is_trading": trading_bot.is_trading,
                 "balance": balance,
                 "pnl": trading_bot.pnl,
@@ -466,6 +518,30 @@ async def stop_trading():
     return {"status": "success"}
 
 
+@app.post("/api/ai/train")
+async def train_ai_model():
+    """Train the AI model with historical data"""
+    if len(tracker.digits) < 100:
+        return {"status": "error", "message": "Need at least 100 ticks to train model"}
+    
+    success = ai_predictor.train_model(list(tracker.digits))
+    if success:
+        return {"status": "success", "message": "AI model trained successfully"}
+    else:
+        return {"status": "error", "message": "Failed to train AI model"}
+
+
+@app.get("/api/ai/status")
+async def get_ai_status():
+    """Get AI model status and accuracy"""
+    return {
+        "is_trained": ai_predictor.digit_predictor.is_trained,
+        "prediction_accuracy": ai_predictor.get_prediction_accuracy(),
+        "total_predictions": len(ai_predictor.prediction_history),
+        "data_points": len(tracker.digits)
+    }
+
+
 @app.get("/api/history")
 async def get_history():
     conn = sqlite3.connect("volatility_data.db")
@@ -489,7 +565,17 @@ async def get_history():
 # -----------------------
 @app.on_event("startup")
 async def startup_event():
-    # Nothing automatic here. We'll connect on start_trading endpoint to avoid auto-live on backend boot.
+    # Auto-train AI model if we have enough historical data
+    conn = sqlite3.connect("volatility_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_digit FROM ticks ORDER BY timestamp DESC LIMIT 1000")
+    historical_digits = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    if len(historical_digits) >= 100:
+        logging.info(f"Training AI model with {len(historical_digits)} historical data points...")
+        ai_predictor.train_model(historical_digits)
+    
     logging.info("API server started. Call /api/trading/start to begin live ticks & trading.")
 
 
