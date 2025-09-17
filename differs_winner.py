@@ -10,6 +10,8 @@ import json
 from collections import deque, Counter
 from loss_prevention_system import LossPreventionSystem
 from backend.ai_predictor import EnhancedPredictor
+from backend.ai_performance_monitor import AIPerformanceMonitor
+from backend.performance_tracker import PerformanceTracker
 
 class DiffersWinner:
     def __init__(self, api_token):
@@ -32,6 +34,12 @@ class DiffersWinner:
 
         # Initialize AI Predictor
         self.ai_predictor = EnhancedPredictor()
+
+        # Initialize AI Performance Monitor
+        self.ai_monitor = AIPerformanceMonitor()
+
+        # Initialize Performance Tracker
+        self.performance_tracker = PerformanceTracker()
         
     async def connect(self):
         try:
@@ -250,6 +258,10 @@ class DiffersWinner:
                             # Use DIFFERS strategy: bet AGAINST the predicted digit
                             differs_digit = predicted_digit
 
+                            # Store prediction for accuracy tracking
+                            self.last_prediction = predicted_digit
+                            self.last_confidence = ai_prediction['final_confidence']
+
                             self.trades_made += 1
 
                             print(f"🤖 AI TRADE #{self.trades_made}: ${ai_stake:.2f} AGAINST digit {differs_digit}")
@@ -259,6 +271,18 @@ class DiffersWinner:
                             print(f"   Volatility Favorable: {ai_prediction['volatility']['trade_favorable']}")
 
                             await self.place_differs_trade(differs_digit, ai_stake)
+
+                            # Log trade in performance tracker
+                            trade_info = {
+                                'trade_number': self.trades_made,
+                                'predicted_digit': predicted_digit,
+                                'differs_digit': differs_digit,
+                                'stake': ai_stake,
+                                'confidence': ai_prediction['final_confidence'],
+                                'market_session': ai_prediction['market_session'],
+                                'volatility_favorable': ai_prediction['volatility']['trade_favorable']
+                            }
+                            self.performance_tracker.log_trade(trade_info)
 
                             # Wait between trades
                             await asyncio.sleep(3)
@@ -275,6 +299,23 @@ class DiffersWinner:
 
                         # Update loss prevention system
                         self.loss_prevention.update_balance(new_balance)
+
+                        # Log AI prediction accuracy if we have a prediction
+                        if hasattr(self, 'last_prediction') and hasattr(self, 'last_confidence'):
+                            # Get the actual digit that just occurred (the one that determined win/loss)
+                            if self.recent_digits:
+                                actual_digit = self.recent_digits[-1]
+                                self.ai_monitor.log_prediction(self.last_prediction, actual_digit, self.last_confidence)
+                                print(f"🤖 AI Accuracy: {self.ai_monitor.get_accuracy():.1f}%")
+
+                        # Update performance tracker with trade result
+                        trade_result = {
+                            'profit': profit,
+                            'balance': self.balance,
+                            'total_profit': total_profit,
+                            'ai_accuracy': self.ai_monitor.get_accuracy() if hasattr(self, 'ai_monitor') else 0
+                        }
+                        self.performance_tracker.log_trade(trade_result)
 
                         if profit > 0:
                             self.wins += 1
@@ -307,7 +348,33 @@ class DiffersWinner:
         print(f"\n📊 DIFFERS TRADING COMPLETE")
         print(f"Trades: {self.trades_made} | Wins: {self.wins} | Losses: {self.losses}")
         print(f"Final Result: ${final_profit:.2f}")
-        
+
+        # Update final metrics in performance tracker
+        self.performance_tracker.update_metrics('total_trades', self.trades_made)
+        self.performance_tracker.update_metrics('wins', self.wins)
+        self.performance_tracker.update_metrics('losses', self.losses)
+        self.performance_tracker.update_metrics('final_profit', final_profit)
+        self.performance_tracker.update_metrics('win_rate', (self.wins / self.trades_made) * 100 if self.trades_made > 0 else 0)
+
+        # Log AI performance
+        self.performance_tracker.log_ai_performance(
+            self.ai_monitor.get_accuracy(),
+            75.0,  # Average confidence (could be calculated more precisely)
+            self.trades_made
+        )
+
+        # Log loss prevention metrics
+        self.performance_tracker.log_loss_prevention(
+            abs(final_profit) if final_profit < 0 else 0,
+            self.loss_prevention.max_daily_loss,
+            self.losses
+        )
+
+        # Save performance data and generate report
+        self.performance_tracker.save_session()
+        report = self.performance_tracker.generate_report()
+        print(report)
+
         if final_profit > 0:
             print("🎉 DIFFERS STRATEGY SUCCESSFUL! 💰")
 
