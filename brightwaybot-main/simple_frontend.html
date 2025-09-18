@@ -204,7 +204,9 @@
 
         function connectWebSocket() {
             try {
-                ws = new WebSocket('ws://localhost:8000/ws');
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const host = window.location.host;
+                ws = new WebSocket(`${protocol}//${host}/ws`);
                 
                 ws.onopen = function() {
                     log('Connected to backend server', 'positive');
@@ -270,7 +272,7 @@
 
         async function makeApiCall(endpoint, method = 'POST', body = null) {
             try {
-                const response = await fetch(`http://localhost:8000${endpoint}`, {
+                const response = await fetch(`${endpoint}`, {
                     method: method,
                     headers: {
                         'Content-Type': 'application/json',
