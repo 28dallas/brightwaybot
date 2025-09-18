@@ -55,16 +55,18 @@ async def serve_frontend():
 # Models
 # -----------------------
 class TradingConfig(BaseModel):
-    stake: float = 1.0
+    stake: float = 50.0
     duration: int = 1  # ticks (1 means bet next tick)
     strategy: str = "matches"  # 'matches' or 'differs'
     selected_number: int = 5  # user's chosen digit (0-9)
     stop_loss: float = 10.0
     take_profit: float = 20.0
-    confidence_threshold: float = 50.0  # percent bias (0-100)
+    confidence_threshold: float = 30.0  # percent bias (0-100)
     min_bias_count: int = 6  # minimum occurrences in recent window to act
     use_ai_prediction: bool = True  # Use AI prediction instead of selected number
     auto_stake_sizing: bool = True  # Use Kelly criterion for stake sizing
+    max_wins: int = 20  # Stop after 20 wins
+    max_losses: int = 2  # Stop after 2 losses
 
 
 # -----------------------
@@ -303,6 +305,18 @@ class TradingBot:
         self.losses = 0
 
     def check_risk_limits(self):
+        # Check win/loss limits
+        if self.wins >= self.config.max_wins:
+            self.is_trading = False
+            logging.info(f"Max wins reached ({self.wins}). Trading stopped.")
+            return False
+        
+        if self.losses >= self.config.max_losses:
+            self.is_trading = False
+            logging.info(f"Max losses reached ({self.losses}). Trading stopped.")
+            return False
+        
+        # Original P&L limits
         if self.pnl <= -self.config.stop_loss or self.pnl >= self.config.take_profit:
             self.is_trading = False
             return False
@@ -381,27 +395,23 @@ async def decide_and_maybe_trade(price, ts, current_digit):
         logging.info("Risk limits hit: trading stopped.")
         return
 
-    # Check if we should trade based on AI or selected number
-    if not trading_bot.should_trade(ai_prediction, current_digit):
+    # Trade more frequently - every 2-3 ticks if we have enough data
+    if len(tracker.digits) < 5:
         return
     
-    # Add some randomness to make trades more frequent (every 3-5 ticks)
-    if len(tracker.digits) % random.randint(3, 5) != 0:
+    # Trade every 2-3 ticks regardless of AI prediction
+    if len(tracker.digits) % random.randint(2, 3) != 0:
         return
 
-    # Determine trade parameters
-    if trading_bot.config.use_ai_prediction:
-        chosen_digit = ai_prediction['predicted_digit']
-        stake = trading_bot.get_trade_stake(ai_prediction)
-    else:
-        chosen_digit = trading_bot.config.selected_number
-        stake = trading_bot.config.stake
+    # Determine trade parameters - always use AI prediction
+    chosen_digit = ai_prediction.get('predicted_digit', random.randint(0, 9))
+    stake = trading_bot.config.stake  # Use fixed $50 stake
     
     contract_type = trading_bot.get_contract_type()
 
-    # Don't trade if stake is 0 (AI says no trade)
+    # Ensure minimum stake
     if stake <= 0:
-        return
+        stake = trading_bot.config.stake  # Use $50 stake
 
     # Place trade
     result = await deriv_client.place_digits_trade(chosen_digit, contract_type, stake, trading_bot.config.duration)
@@ -615,7 +625,7 @@ async def decide_and_maybe_trade_demo(price, ts, current_digit):
             chosen_digit = trading_bot.config.selected_number
             confidence = 50.0
         
-        stake = min(trading_bot.config.stake, deriv_client.balance * 0.1)  # Max 10% of balance
+        stake = trading_bot.config.stake  # Use fixed $50 stake
         
         # Simulate win/loss based on confidence (higher confidence = better win rate)
         win_probability = 0.45 + (confidence / 200)  # Base 45% + confidence bonus
