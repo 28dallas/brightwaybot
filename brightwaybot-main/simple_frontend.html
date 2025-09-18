@@ -119,6 +119,7 @@
                     <button class="btn-success" onclick="startTrading()">Start Trading</button>
                     <button class="btn-danger" onclick="stopTrading()">Stop Trading</button>
                     <button class="btn-primary" onclick="runDemo()">Run Demo</button>
+                    <button class="btn-primary" onclick="resetBalance()">Reset Balance</button>
                 </div>
                 
                 <h4>Current Tick Data</h4>
@@ -316,6 +317,15 @@
                 log('Demo mode started: ' + result.mode, 'positive');
             } catch (error) {
                 log('Failed to start demo: ' + error.message, 'negative');
+            }
+        }
+
+        async function resetBalance() {
+            try {
+                const result = await makeApiCall('/api/balance/reset');
+                log('Balance and stats reset to $' + result.balance.toFixed(2), 'positive');
+            } catch (error) {
+                log('Failed to reset balance: ' + error.message, 'negative');
             }
         }
 

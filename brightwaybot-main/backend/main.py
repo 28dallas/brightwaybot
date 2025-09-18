@@ -61,7 +61,7 @@ class TradingConfig(BaseModel):
     selected_number: int = 5  # user's chosen digit (0-9)
     stop_loss: float = 10.0
     take_profit: float = 20.0
-    confidence_threshold: float = 60.0  # percent bias (0-100)
+    confidence_threshold: float = 50.0  # percent bias (0-100)
     min_bias_count: int = 6  # minimum occurrences in recent window to act
     use_ai_prediction: bool = True  # Use AI prediction instead of selected number
     auto_stake_sizing: bool = True  # Use Kelly criterion for stake sizing
@@ -175,7 +175,7 @@ class DerivAPIClient:
         self.app_id = app_id
         self.ws = None
         self.is_connected = False
-        self.balance = 0.0
+        self.balance = 1000.0  # Start with demo balance
 
     async def connect(self):
         if not self.api_token:
@@ -189,8 +189,16 @@ class DerivAPIClient:
             if "error" in data:
                 logging.error(f"Authorization error: {data['error']}")
                 return False
+            
+            # Get initial balance after successful authorization
+            await self.ws.send(json.dumps({"balance": 1, "subscribe": 0}))
+            balance_response = await self.ws.recv()
+            balance_data = json.loads(balance_response)
+            if "balance" in balance_data:
+                self.balance = float(balance_data["balance"]["balance"])
+                logging.info(f"Connected to Deriv API. Balance: ${self.balance}")
+            
             self.is_connected = True
-            logging.info("Connected to Deriv API successfully.")
             return True
         except Exception as e:
             logging.error(f"Failed to connect to Deriv API: {e}")
@@ -240,20 +248,23 @@ class DerivAPIClient:
 
     async def get_balance(self):
         if not self.is_connected:
-            await self.connect()
-        await self.ws.send(json.dumps({"balance": 1, "subscribe": 0}))
-        response = await self.ws.recv()
-        data = json.loads(response)
-        if "balance" in data:
-            return data["balance"]["balance"]
-        return None
+            if not await self.connect():
+                return self.balance
+        try:
+            await self.ws.send(json.dumps({"balance": 1, "subscribe": 0}))
+            response = await self.ws.recv()
+            data = json.loads(response)
+            if "balance" in data:
+                self.balance = float(data["balance"]["balance"])
+                return self.balance
+        except Exception as e:
+            logging.error(f"Error getting balance: {e}")
+        return self.balance
 
     async def refresh_balance_once(self):
         """Get current balance without subscription"""
-        try:
-            return await self.get_balance()
-        except:
-            return self.balance
+        # Just return cached balance to avoid WebSocket conflicts
+        return self.balance
 
     async def connect_and_subscribe_ticks(self):
         """Connect to Deriv API and start tick subscription"""
@@ -311,14 +322,12 @@ class TradingBot:
         Check if we should trade based on AI prediction or selected number.
         """
         if self.config.use_ai_prediction:
-            # Use AI prediction
-            predicted_digit = ai_prediction['predicted_digit']
+            # Use AI prediction - trade when confidence is high enough
             confidence = ai_prediction['final_confidence']
-            should_trade_ai = ai_prediction['should_trade']
+            should_trade_ai = ai_prediction.get('should_trade', True)
             
-            return (current_digit == predicted_digit and 
-                   confidence >= self.config.confidence_threshold and 
-                   should_trade_ai)
+            # Trade if confidence is above threshold (don't require digit match)
+            return (confidence >= self.config.confidence_threshold and should_trade_ai)
         else:
             # Use selected number (original logic)
             return current_digit == self.config.selected_number
@@ -375,6 +384,10 @@ async def decide_and_maybe_trade(price, ts, current_digit):
     # Check if we should trade based on AI or selected number
     if not trading_bot.should_trade(ai_prediction, current_digit):
         return
+    
+    # Add some randomness to make trades more frequent (every 3-5 ticks)
+    if len(tracker.digits) % random.randint(3, 5) != 0:
+        return
 
     # Determine trade parameters
     if trading_bot.config.use_ai_prediction:
@@ -413,7 +426,14 @@ async def decide_and_maybe_trade(price, ts, current_digit):
     except Exception as e:
         logging.error(f"Error parsing trade result: {e}")
 
-    # Update bot stats
+    # Update balance and bot stats
+    if deriv_client.is_connected:
+        # For live trading, balance is managed by Deriv API
+        pass
+    else:
+        # For demo/simulation, update local balance
+        deriv_client.balance += profit
+    
     trading_bot.pnl += profit
     trading_bot.total_trades += 1
     if win:
@@ -451,11 +471,8 @@ async def websocket_endpoint(websocket: WebSocket):
             last_digit = tracker.digits[-1] if tracker.digits else None
             analysis = tracker.get_frequency_analysis(recent_window=50)
 
-            # refresh balance (non-blocking call but await here to provide latest)
-            try:
-                balance = await deriv_client.refresh_balance_once() if deriv_client.api_token else deriv_client.balance
-            except:
-                balance = deriv_client.balance
+            # Use cached balance to avoid WebSocket conflicts
+            balance = deriv_client.balance
 
             # Get AI prediction for frontend
             ai_prediction = None
@@ -479,12 +496,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 "analysis": analysis or {},
                 "ai_prediction": ai_prediction or {"predicted_digit": 0, "final_confidence": 0.0},
                 "is_trading": trading_bot.is_trading,
-                "balance": balance or 1322.55,
+                "balance": balance if balance is not None else deriv_client.balance,
                 "pnl": trading_bot.pnl,
                 "total_trades": trading_bot.total_trades,
                 "wins": trading_bot.wins,
                 "losses": trading_bot.losses,
-                "config": trading_bot.config.dict(),
+                "config": trading_bot.config.model_dump(),
             }
 
             try:
@@ -514,8 +531,8 @@ async def update_trading_config(conf: dict):
     for k, v in conf.items():
         if hasattr(trading_bot.config, k):
             setattr(trading_bot.config, k, v)
-    logging.info(f"Config updated: {trading_bot.config.dict()}")
-    return {"status": "success", "config": trading_bot.config.dict()}
+    logging.info(f"Config updated: {trading_bot.config.model_dump()}")
+    return {"status": "success", "config": trading_bot.config.model_dump()}
 
 
 @app.post("/api/trading/start")
@@ -571,17 +588,47 @@ async def decide_and_maybe_trade_demo(price, ts, current_digit):
     if not trading_bot.is_trading:
         return
         
-    # Simple demo logic - trade every 10th tick
-    if trading_bot.total_trades % 10 == 0 and len(tracker.digits) > 10:
-        # Simulate a trade
-        chosen_digit = trading_bot.config.selected_number
-        stake = trading_bot.config.stake
+    # Get AI prediction for demo trading
+    ai_prediction = None
+    if len(tracker.digits) > 10:
+        try:
+            ai_prediction = ai_predictor.get_comprehensive_prediction(
+                list(tracker.digits), 
+                list(tracker.prices), 
+                deriv_client.balance, 
+                trading_bot.config.stake
+            )
+        except:
+            ai_prediction = {"predicted_digit": trading_bot.config.selected_number, "final_confidence": 50.0}
+    
+    # Check if we should trade (every 5-10 ticks with some randomness)
+    should_trade_now = (len(tracker.digits) % random.randint(5, 10) == 0 and 
+                       len(tracker.digits) > 10 and 
+                       deriv_client.balance > trading_bot.config.stake)
+    
+    if should_trade_now:
+        # Determine trade parameters
+        if trading_bot.config.use_ai_prediction and ai_prediction:
+            chosen_digit = ai_prediction['predicted_digit']
+            confidence = ai_prediction.get('final_confidence', 50.0)
+        else:
+            chosen_digit = trading_bot.config.selected_number
+            confidence = 50.0
         
-        # Simulate win/loss (60% win rate)
-        win = random.random() < 0.6
-        profit = stake * 0.8 if win else -stake
+        stake = min(trading_bot.config.stake, deriv_client.balance * 0.1)  # Max 10% of balance
         
-        # Update bot stats
+        # Simulate win/loss based on confidence (higher confidence = better win rate)
+        win_probability = 0.45 + (confidence / 200)  # Base 45% + confidence bonus
+        win = random.random() < win_probability
+        
+        # Calculate profit/loss
+        if win:
+            profit = stake * 0.85  # 85% payout
+        else:
+            profit = -stake
+        
+        # Update balance and bot stats
+        deriv_client.balance += profit
         trading_bot.pnl += profit
         trading_bot.total_trades += 1
         if win:
@@ -589,9 +636,31 @@ async def decide_and_maybe_trade_demo(price, ts, current_digit):
         else:
             trading_bot.losses += 1
         
+        # Persist trade
+        conn = sqlite3.connect("volatility_data.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO trades (timestamp, strategy, chosen_digit, stake, duration, result, profit) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (datetime.utcnow(), trading_bot.config.strategy, chosen_digit, stake, trading_bot.config.duration, 
+             json.dumps({"demo": True, "win": win, "confidence": confidence}), profit),
+        )
+        conn.commit()
+        conn.close()
+        
         # Log the simulated trade
-        logging.info(f"Demo trade: Digit {chosen_digit}, Stake ${stake}, {'WIN' if win else 'LOSS'}, Profit: ${profit:.2f}")
+        logging.info(f"Demo trade: Digit {chosen_digit}, Stake ${stake:.2f}, {'WIN' if win else 'LOSS'}, Profit: ${profit:.2f}, Balance: ${deriv_client.balance:.2f}")
 
+
+@app.post("/api/balance/reset")
+async def reset_balance():
+    """Reset demo balance to starting amount"""
+    deriv_client.balance = 1000.0
+    trading_bot.pnl = 0.0
+    trading_bot.total_trades = 0
+    trading_bot.wins = 0
+    trading_bot.losses = 0
+    logging.info("Demo balance and stats reset")
+    return {"status": "success", "balance": deriv_client.balance}
 
 @app.post("/api/ai/train")
 async def train_ai_model():
