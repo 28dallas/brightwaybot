@@ -204,7 +204,7 @@
 
         function connectWebSocket() {
             try {
-                ws = new WebSocket('ws://localhost:8002/ws');
+                ws = new WebSocket('ws://localhost:8000/ws');
                 
                 ws.onopen = function() {
                     log('Connected to backend server', 'positive');
@@ -239,28 +239,30 @@
         }
 
         function updateDashboard(data) {
-            if (data.price) {
+            if (data.price !== null && data.price !== undefined) {
                 document.getElementById('current-price').textContent = data.price.toFixed(5);
             }
-            if (data.last_digit !== undefined) {
+            if (data.last_digit !== null && data.last_digit !== undefined) {
                 document.getElementById('last-digit').textContent = data.last_digit;
             }
-            if (data.ai_prediction && data.ai_prediction.predicted_digit !== undefined) {
+            if (data.ai_prediction && data.ai_prediction.predicted_digit !== null && data.ai_prediction.predicted_digit !== undefined) {
                 document.getElementById('ai-prediction').textContent = data.ai_prediction.predicted_digit;
-                document.getElementById('confidence').textContent = data.ai_prediction.final_confidence.toFixed(1) + '%';
+                if (data.ai_prediction.final_confidence !== null && data.ai_prediction.final_confidence !== undefined) {
+                    document.getElementById('confidence').textContent = data.ai_prediction.final_confidence.toFixed(1) + '%';
+                }
             }
-            if (data.balance !== undefined) {
+            if (data.balance !== null && data.balance !== undefined) {
                 document.getElementById('balance').textContent = '$' + data.balance.toFixed(2);
             }
-            if (data.pnl !== undefined) {
+            if (data.pnl !== null && data.pnl !== undefined) {
                 const pnlElement = document.getElementById('pnl');
                 pnlElement.textContent = '$' + data.pnl.toFixed(2);
                 pnlElement.className = data.pnl >= 0 ? 'stat-value positive' : 'stat-value negative';
             }
-            if (data.total_trades !== undefined) {
+            if (data.total_trades !== null && data.total_trades !== undefined) {
                 document.getElementById('total-trades').textContent = data.total_trades;
             }
-            if (data.wins !== undefined && data.total_trades > 0) {
+            if (data.wins !== null && data.wins !== undefined && data.total_trades > 0) {
                 const winRate = (data.wins / data.total_trades * 100).toFixed(1);
                 document.getElementById('win-rate').textContent = winRate + '%';
             }
@@ -268,7 +270,7 @@
 
         async function makeApiCall(endpoint, method = 'POST', body = null) {
             try {
-                const response = await fetch(`http://localhost:8002${endpoint}`, {
+                const response = await fetch(`http://localhost:8000${endpoint}`, {
                     method: method,
                     headers: {
                         'Content-Type': 'application/json',
@@ -305,12 +307,14 @@
             }
         }
 
-        function runDemo() {
-            log('Running demo trading simulation...', 'neutral');
-            // This would typically call the demo endpoint or run client-side simulation
-            setTimeout(() => {
-                log('Demo completed. Check console for results.', 'positive');
-            }, 2000);
+        async function runDemo() {
+            try {
+                log('Starting demo trading simulation...', 'neutral');
+                const result = await makeApiCall('/api/trading/demo');
+                log('Demo mode started: ' + result.mode, 'positive');
+            } catch (error) {
+                log('Failed to start demo: ' + error.message, 'negative');
+            }
         }
 
         // Initialize connection when page loads

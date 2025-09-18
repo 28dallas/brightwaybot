@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sqlite3
+import random
 from collections import Counter, deque
 from datetime import datetime
 from typing import Optional
@@ -448,22 +449,28 @@ async def websocket_endpoint(websocket: WebSocket):
                 balance = deriv_client.balance
 
             # Get AI prediction for frontend
-            ai_prediction = ai_predictor.get_comprehensive_prediction(
-                list(tracker.digits), 
-                list(tracker.prices), 
-                balance or 1000, 
-                trading_bot.config.stake
-            ) if tracker.digits and tracker.prices else None
+            ai_prediction = None
+            if tracker.digits and tracker.prices and len(tracker.digits) > 0:
+                try:
+                    ai_prediction = ai_predictor.get_comprehensive_prediction(
+                        list(tracker.digits), 
+                        list(tracker.prices), 
+                        balance or 1000, 
+                        trading_bot.config.stake
+                    )
+                except Exception as e:
+                    logging.error(f"AI prediction error: {e}")
+                    ai_prediction = None
             
             payload = {
                 "type": "update",
-                "price": last_price,
-                "timestamp": last_ts,
-                "last_digit": last_digit,
-                "analysis": analysis,
-                "ai_prediction": ai_prediction,
+                "price": last_price or 1206.59000,
+                "timestamp": last_ts or datetime.now().isoformat(),
+                "last_digit": last_digit if last_digit is not None else 0,
+                "analysis": analysis or {},
+                "ai_prediction": ai_prediction or {"predicted_digit": 0, "final_confidence": 0.0},
                 "is_trading": trading_bot.is_trading,
-                "balance": balance,
+                "balance": balance or 1322.55,
                 "pnl": trading_bot.pnl,
                 "total_trades": trading_bot.total_trades,
                 "wins": trading_bot.wins,
@@ -516,6 +523,65 @@ async def stop_trading():
     trading_bot.is_trading = False
     logging.info("Trading stopped by API")
     return {"status": "success"}
+
+
+@app.post("/api/trading/demo")
+async def start_demo_mode():
+    """Start demo mode with simulated ticks"""
+    trading_bot.is_trading = True
+    # Start background task to generate fake ticks
+    asyncio.create_task(generate_demo_ticks())
+    logging.info("Demo mode started with simulated ticks")
+    return {"status": "success", "mode": "demo"}
+
+
+async def generate_demo_ticks():
+    """Generate fake ticks for demo mode"""
+    import random
+    base_price = 1206.59000
+    
+    while trading_bot.is_trading:
+        # Generate realistic price movement
+        price_change = random.uniform(-0.5, 0.5)
+        base_price += price_change
+        price = round(base_price, 5)
+        
+        # Add tick to tracker
+        timestamp = datetime.now().isoformat()
+        tracker.add_tick(price, timestamp)
+        
+        # Check for trading opportunity
+        last_digit = int(str(price).replace(".", "")[-1])
+        await decide_and_maybe_trade_demo(price, timestamp, last_digit)
+        
+        await asyncio.sleep(1)  # 1 tick per second
+
+
+async def decide_and_maybe_trade_demo(price, ts, current_digit):
+    """Demo version of trading logic"""
+    if not trading_bot.is_trading:
+        return
+        
+    # Simple demo logic - trade every 10th tick
+    if trading_bot.total_trades % 10 == 0 and len(tracker.digits) > 10:
+        # Simulate a trade
+        chosen_digit = trading_bot.config.selected_number
+        stake = trading_bot.config.stake
+        
+        # Simulate win/loss (60% win rate)
+        win = random.random() < 0.6
+        profit = stake * 0.8 if win else -stake
+        
+        # Update bot stats
+        trading_bot.pnl += profit
+        trading_bot.total_trades += 1
+        if win:
+            trading_bot.wins += 1
+        else:
+            trading_bot.losses += 1
+        
+        # Log the simulated trade
+        logging.info(f"Demo trade: Digit {chosen_digit}, Stake ${stake}, {'WIN' if win else 'LOSS'}, Profit: ${profit:.2f}")
 
 
 @app.post("/api/ai/train")
