@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: brightwaybot-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend && python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DERIV_API_TOKEN
+        sync: false
+      - key: DERIV_APP_ID
+        value: 1089
+      - key: DATABASE_URL
+        value: sqlite:///volatility_data.db
+      - key: HOST
+        value: 0.0.0.0
