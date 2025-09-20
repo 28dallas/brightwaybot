@@ -1,4 +1,4 @@
-# main.py - Deriv live-ticks + digit matches/differs bot
+ # main.py - Deriv live-ticks + digit matches/differs bot
 import asyncio
 import json
 import logging
@@ -87,8 +87,20 @@ def init_db():
         )
     """
     )
+    # Enable WAL mode for better concurrency
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
     conn.commit()
     conn.close()
+
+
+# Add this new function for thread-safe database operations
+def get_db_connection():
+    """Get a database connection with proper timeout and WAL mode"""
+    conn = sqlite3.connect("volatility_data.db", timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
 
 
 init_db()
@@ -110,8 +122,8 @@ class VolatilityTracker:
         self.digits.append(last_digit)
         self.prices.append(price)
         self.timestamps.append(timestamp)
-        # persist
-        conn = sqlite3.connect("volatility_data.db")
+        # persist with thread-safe connection
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO ticks (timestamp, price, last_digit) VALUES (?, ?, ?)",
@@ -181,6 +193,20 @@ class DerivAPIClient:
                 return False
             self.is_connected = True
             logging.info("Connected to Deriv API successfully.")
+
+            # Get initial balance
+            try:
+                balance = await self.get_balance_with_retry()
+                if balance is not None:
+                    self.balance = balance
+                    logging.info(f"Initial balance: ${balance}")
+                else:
+                    logging.warning("Could not fetch initial balance, using default")
+                    self.balance = 1000  # Default demo balance
+            except Exception as e:
+                logging.warning(f"Failed to get initial balance: {e}")
+                self.balance = 1000  # Default demo balance
+
             return True
         except Exception as e:
             logging.error(f"Failed to connect to Deriv API: {e}")
@@ -231,11 +257,27 @@ class DerivAPIClient:
     async def get_balance(self):
         if not self.is_connected:
             await self.connect()
-        await self.ws.send(json.dumps({"balance": 1, "subscribe": 0}))
-        response = await self.ws.recv()
-        data = json.loads(response)
-        if "balance" in data:
-            return data["balance"]["balance"]
+        try:
+            await self.ws.send(json.dumps({"balance": 1, "subscribe": 0}))
+            response = await self.ws.recv()
+            data = json.loads(response)
+            if "balance" in data:
+                return data["balance"]["balance"]
+        except Exception as e:
+            logging.warning(f"Error getting balance: {e}")
+        return None
+
+    async def get_balance_with_retry(self, max_retries=3):
+        """Get balance with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                balance = await self.get_balance()
+                if balance is not None:
+                    return balance
+            except Exception as e:
+                logging.warning(f"Balance fetch attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # Wait 1 second before retry
         return None
 
     async def refresh_balance_once(self):
@@ -250,20 +292,51 @@ class DerivAPIClient:
         if await self.connect():
             # Start background task to process ticks
             asyncio.create_task(self._process_ticks())
+            # Start background task to refresh balance periodically
+            asyncio.create_task(self._refresh_balance_periodically())
             return True
         return False
 
+    async def _refresh_balance_periodically(self):
+        """Background task to refresh balance every 30 seconds"""
+        while self.is_connected:
+            try:
+                balance = await self.get_balance()
+                if balance is not None:
+                    self.balance = balance
+                    logging.info(f"Balance updated: ${balance}")
+            except Exception as e:
+                logging.warning(f"Failed to refresh balance: {e}")
+            await asyncio.sleep(30)  # Refresh every 30 seconds
+
     async def _process_ticks(self):
         """Background task to process incoming ticks"""
-        async for tick_data in self.get_ticks():
-            price = float(tick_data.get("quote", 0))
-            timestamp = tick_data.get("epoch")
-            if price and timestamp:
-                # Add to tracker
-                tracker.add_tick(price, datetime.fromtimestamp(timestamp).isoformat())
-                # Check for trading opportunity
-                last_digit = int(str(price).replace(".", "")[-1])
-                await decide_and_maybe_trade(price, timestamp, last_digit)
+        retry_count = 0
+        max_retries = 5
+
+        while self.is_connected and retry_count < max_retries:
+            try:
+                async for tick_data in self.get_ticks():
+                    price = float(tick_data.get("quote", 0))
+                    timestamp = tick_data.get("epoch")
+                    if price and timestamp:
+                        # Add to tracker
+                        tracker.add_tick(price, datetime.fromtimestamp(timestamp).isoformat())
+                        # Check for trading opportunity
+                        last_digit = int(str(price).replace(".", "")[-1])
+                        await decide_and_maybe_trade(price, timestamp, last_digit)
+                        retry_count = 0  # Reset retry count on successful tick
+
+            except Exception as e:
+                retry_count += 1
+                logging.error(f"Error in tick processing (attempt {retry_count}/{max_retries}): {e}")
+                if retry_count < max_retries:
+                    logging.info("Attempting to reconnect to Deriv API...")
+                    await asyncio.sleep(5)  # Wait 5 seconds before retry
+                    await self.connect()  # Try to reconnect
+                else:
+                    logging.error("Max retries exceeded. Stopping tick processing.")
+                    break
 
 
 deriv_client = DerivAPIClient()
@@ -334,21 +407,21 @@ async def decide_and_maybe_trade(price, ts, current_digit):
     """
     if not trading_bot.is_trading:
         return
-        
-    # Get current balance for AI calculations
-    current_balance = await deriv_client.get_balance() or 1000  # Default for demo
-    
+
+    # Use cached balance to avoid WebSocket conflicts
+    current_balance = deriv_client.balance or 1000  # Default for demo
+
     # Get AI prediction
     ai_prediction = ai_predictor.get_comprehensive_prediction(
-        list(tracker.digits), 
-        list(tracker.prices), 
-        current_balance, 
+        list(tracker.digits),
+        list(tracker.prices),
+        current_balance,
         trading_bot.config.stake
     )
-    
+
     # Get ultra-advanced prediction
     ultra_prediction = ultra_ai.ensemble_prediction(list(tracker.digits), list(tracker.prices))
-    
+
     # Combine predictions for maximum accuracy
     if ultra_prediction['confidence'] > ai_prediction['final_confidence']:
         ai_prediction['predicted_digit'] = ultra_prediction['predicted_digit']
@@ -373,7 +446,7 @@ async def decide_and_maybe_trade(price, ts, current_digit):
     else:
         chosen_digit = trading_bot.config.selected_number
         stake = trading_bot.config.stake
-    
+
     contract_type = trading_bot.get_contract_type()
 
     # Don't trade if stake is 0 (AI says no trade)
@@ -411,15 +484,22 @@ async def decide_and_maybe_trade(price, ts, current_digit):
     else:
         trading_bot.losses += 1
 
-    # Persist trade with AI data
-    conn = sqlite3.connect("volatility_data.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO trades (timestamp, strategy, chosen_digit, stake, duration, result, profit) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (datetime.utcnow(), trading_bot.config.strategy, chosen_digit, stake, trading_bot.config.duration, json.dumps({**result, 'ai_prediction': ai_prediction}), profit),
-    )
-    conn.commit()
-    conn.close()
+    # Update cached balance after trade
+    if profit > 0:
+        deriv_client.balance += profit
+
+    # Persist trade with AI data using thread-safe connection
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO trades (timestamp, strategy, chosen_digit, stake, duration, result, profit) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (datetime.utcnow(), trading_bot.config.strategy, chosen_digit, stake, trading_bot.config.duration, json.dumps({**result, 'ai_prediction': ai_prediction}), profit),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Failed to save trade to database: {e}")
 
     logging.info(f"Trade placed. Digit: {chosen_digit}, contract: {contract_type}, stake: {stake}, confidence: {ai_prediction.get('final_confidence', 0):.1f}%, profit: {profit}, pnl: {trading_bot.pnl}")
 
@@ -432,55 +512,67 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     tracker.clients.add(websocket)
     logging.info("Frontend connected to WS")
+
     try:
         while True:
-            # Build payload from latest tick & analysis
-            # use latest values in tracker
-            last_price = tracker.prices[-1] if tracker.prices else None
-            last_ts = tracker.timestamps[-1] if tracker.timestamps else None
-            last_digit = tracker.digits[-1] if tracker.digits else None
-            analysis = tracker.get_frequency_analysis(recent_window=50)
-
-            # refresh balance (non-blocking call but await here to provide latest)
             try:
-                balance = await deriv_client.refresh_balance_once() if deriv_client.api_token else deriv_client.balance
-            except:
-                balance = deriv_client.balance
+                # Build payload from latest tick & analysis
+                last_price = tracker.prices[-1] if tracker.prices else None
+                last_ts = tracker.timestamps[-1] if tracker.timestamps else None
+                last_digit = tracker.digits[-1] if tracker.digits else None
+                analysis = tracker.get_frequency_analysis(recent_window=50)
 
-            # Get AI prediction for frontend
-            ai_prediction = ai_predictor.get_comprehensive_prediction(
-                list(tracker.digits), 
-                list(tracker.prices), 
-                balance or 1000, 
-                trading_bot.config.stake
-            ) if tracker.digits and tracker.prices else None
-            
-            payload = {
-                "type": "update",
-                "price": last_price,
-                "timestamp": last_ts,
-                "last_digit": last_digit,
-                "analysis": analysis,
-                "ai_prediction": ai_prediction,
-                "is_trading": trading_bot.is_trading,
-                "balance": balance,
-                "pnl": trading_bot.pnl,
-                "total_trades": trading_bot.total_trades,
-                "wins": trading_bot.wins,
-                "losses": trading_bot.losses,
-                "config": trading_bot.config.dict(),
-            }
+                # refresh balance (non-blocking call but await here to provide latest)
+                try:
+                    if deriv_client.api_token:
+                        balance = await deriv_client.get_balance_with_retry() or deriv_client.balance
+                    else:
+                        balance = deriv_client.balance or 1000  # Default demo balance
+                except Exception as e:
+                    logging.warning(f"Failed to refresh balance: {e}")
+                    balance = deriv_client.balance or 1000  # Default demo balance
 
-            try:
+                # Get AI prediction for frontend
+                ai_prediction = None
+                try:
+                    if tracker.digits and tracker.prices:
+                        ai_prediction = ai_predictor.get_comprehensive_prediction(
+                            list(tracker.digits),
+                            list(tracker.prices),
+                            balance or 1000,
+                            trading_bot.config.stake
+                        )
+                except Exception as e:
+                    logging.warning(f"Failed to get AI prediction: {e}")
+
+                payload = {
+                    "type": "update",
+                    "price": last_price,
+                    "timestamp": last_ts,
+                    "last_digit": last_digit,
+                    "analysis": analysis,
+                    "ai_prediction": ai_prediction,
+                    "is_trading": trading_bot.is_trading,
+                    "balance": balance,
+                    "pnl": trading_bot.pnl,
+                    "total_trades": trading_bot.total_trades,
+                    "wins": trading_bot.wins,
+                    "losses": trading_bot.losses,
+                    "config": trading_bot.config.model_dump(),  # Updated from dict() to model_dump()
+                }
+
                 await websocket.send_text(json.dumps(payload, default=str))
-            except:
-                # client likely disconnected
-                break
+                await asyncio.sleep(1)
 
-            await asyncio.sleep(1)
+            except Exception as e:
+                logging.error(f"Error in WebSocket loop: {e}")
+                await asyncio.sleep(2)  # Wait before retrying
+                continue
 
     except WebSocketDisconnect:
-        pass
+        logging.info("WebSocket disconnected normally")
+    except Exception as e:
+        logging.error(f"WebSocket error: {e}")
     finally:
         try:
             tracker.clients.discard(websocket)
@@ -489,26 +581,243 @@ async def websocket_endpoint(websocket: WebSocket):
         logging.info("Frontend disconnected from WS")
 
 
+# Add validation for trading config
+def validate_config(config_data):
+    """Validate and fix trading configuration"""
+    validated = config_data.copy()
+
+    # Ensure stake is valid
+    if not validated.get('stake') or validated['stake'] <= 0:
+        validated['stake'] = 1.0
+        logging.warning("Invalid stake, using default: 1.0")
+
+    # Ensure duration is valid
+    if not validated.get('duration') or validated['duration'] <= 0:
+        validated['duration'] = 1
+        logging.warning("Invalid duration, using default: 1")
+
+    # Ensure stop_loss is valid
+    if not validated.get('stop_loss') or validated['stop_loss'] <= 0:
+        validated['stop_loss'] = 10.0
+        logging.warning("Invalid stop_loss, using default: 10.0")
+
+    # Ensure take_profit is valid
+    if not validated.get('take_profit') or validated['take_profit'] <= 0:
+        validated['take_profit'] = 20.0
+        logging.warning("Invalid take_profit, using default: 20.0")
+
+    # Ensure confidence_threshold is valid
+    if not validated.get('confidence_threshold') or validated['confidence_threshold'] <= 0:
+        validated['confidence_threshold'] = 60.0
+        logging.warning("Invalid confidence_threshold, using default: 60.0")
+
+    return validated
+
+
+def analyze_market_conditions():
+    """Analyze current market conditions using all AI systems"""
+    if len(tracker.digits) < 50:
+        return {
+            'volatility': 'low',
+            'trend_strength': 'weak',
+            'confidence': 50.0,
+            'recommended_strategy': 'matches',
+            'ai_consensus': 0.5
+        }
+
+    # Get analysis from all AI systems
+    analysis = tracker.get_frequency_analysis(recent_window=50)
+
+    # Simple predictor analysis
+    simple_prediction = ai_predictor.get_comprehensive_prediction(
+        list(tracker.digits),
+        list(tracker.prices),
+        1000,  # Use default balance for analysis
+        1.0    # Use default stake for analysis
+    )
+
+    # Advanced AI analysis
+    advanced_prediction = ultra_ai.ensemble_prediction(list(tracker.digits), list(tracker.prices))
+
+    # Calculate market volatility
+    recent_digits = list(tracker.digits)[-50:]
+    digit_counts = {}
+    for digit in range(10):
+        digit_counts[digit] = recent_digits.count(digit)
+
+    # Calculate volatility (standard deviation of digit frequencies)
+    frequencies = list(digit_counts.values())
+    mean_freq = sum(frequencies) / len(frequencies)
+    variance = sum((f - mean_freq) ** 2 for f in frequencies) / len(frequencies)
+    volatility = variance ** 0.5
+
+    # Determine volatility level
+    if volatility < 1.5:
+        volatility_level = 'low'
+    elif volatility < 2.5:
+        volatility_level = 'medium'
+    else:
+        volatility_level = 'high'
+
+    # Calculate trend strength
+    trend_strength = analysis.get('confidence', 0)
+
+    # AI consensus
+    ai_consensus = (simple_prediction.get('final_confidence', 0) + advanced_prediction.get('confidence', 0)) / 200.0
+
+    # Determine best strategy based on analysis
+    if volatility_level == 'high' and trend_strength > 70:
+        recommended_strategy = 'differs'  # High volatility + strong trend = differs
+    elif volatility_level == 'low' and ai_consensus > 0.7:
+        recommended_strategy = 'matches'  # Low volatility + high AI confidence = matches
+    else:
+        recommended_strategy = 'matches'  # Default to matches for stability
+
+    return {
+        'volatility': volatility_level,
+        'trend_strength': 'strong' if trend_strength > 70 else 'weak',
+        'confidence': trend_strength,
+        'recommended_strategy': recommended_strategy,
+        'ai_consensus': ai_consensus,
+        'volatility_score': volatility,
+        'simple_ai_confidence': simple_prediction.get('final_confidence', 0),
+        'advanced_ai_confidence': advanced_prediction.get('confidence', 0)
+    }
+
+
+def get_optimal_trading_config(market_analysis, balance=1000):
+    """Generate optimal trading configuration based on AI analysis"""
+    base_config = {
+        'stake': 1.0,
+        'duration': 1,
+        'strategy': market_analysis['recommended_strategy'],
+        'selected_number': 5,
+        'stop_loss': 10.0,
+        'take_profit': 20.0,
+        'confidence_threshold': 60.0,
+        'min_bias_count': 6,
+        'use_ai_prediction': True,
+        'auto_stake_sizing': True
+    }
+
+    # Adjust based on market conditions
+    if market_analysis['volatility'] == 'high':
+        # High volatility: be more conservative
+        base_config.update({
+            'stake': min(balance * 0.01, 5.0),  # Max 1% of balance or $5
+            'confidence_threshold': 75.0,  # Higher confidence required
+            'stop_loss': 5.0,  # Tighter stop loss
+            'duration': 1  # Shorter duration
+        })
+    elif market_analysis['volatility'] == 'medium':
+        # Medium volatility: balanced approach
+        base_config.update({
+            'stake': min(balance * 0.02, 10.0),  # Max 2% of balance or $10
+            'confidence_threshold': 65.0,
+            'stop_loss': 8.0,
+            'duration': 1
+        })
+    else:
+        # Low volatility: can be more aggressive
+        base_config.update({
+            'stake': min(balance * 0.03, 15.0),  # Max 3% of balance or $15
+            'confidence_threshold': 55.0,
+            'stop_loss': 12.0,
+            'duration': 1
+        })
+
+    # Adjust based on AI confidence
+    if market_analysis['ai_consensus'] > 0.8:
+        # High AI confidence: can increase stake slightly
+        base_config['stake'] = min(base_config['stake'] * 1.5, balance * 0.05)
+        base_config['confidence_threshold'] = max(base_config['confidence_threshold'] - 10, 50.0)
+    elif market_analysis['ai_consensus'] < 0.6:
+        # Low AI confidence: be more conservative
+        base_config['stake'] = base_config['stake'] * 0.7
+        base_config['confidence_threshold'] = min(base_config['confidence_threshold'] + 15, 85.0)
+
+    # Adjust take profit based on strategy
+    if market_analysis['recommended_strategy'] == 'differs':
+        base_config['take_profit'] = base_config['take_profit'] * 1.2  # Higher profit target for differs
+
+    return base_config
+
+
 # -----------------------
 # REST endpoints
 # -----------------------
 @app.post("/api/trading/config")
 async def update_trading_config(conf: dict):
-    # validate and update
-    for k, v in conf.items():
+    """Update trading configuration with validation"""
+    # Validate the config data
+    validated_config = validate_config(conf)
+
+    # Update trading bot config with validated data
+    for k, v in validated_config.items():
         if hasattr(trading_bot.config, k):
             setattr(trading_bot.config, k, v)
-    logging.info(f"Config updated: {trading_bot.config.dict()}")
-    return {"status": "success", "config": trading_bot.config.dict()}
+
+    logging.info(f"Trading config updated: {trading_bot.config.model_dump()}")
+    return {"status": "success", "config": trading_bot.config.model_dump()}
 
 
 @app.post("/api/trading/start")
 async def start_trading():
-    # connect and subscribe to live ticks (if token provided)
+    """Start trading with intelligent AI-powered configuration"""
+    # Get current balance for configuration
+    current_balance = deriv_client.balance or 1000
+
+    # Analyze market conditions using all AI systems
+    market_analysis = analyze_market_conditions()
+
+    # Generate optimal configuration
+    optimal_config = get_optimal_trading_config(market_analysis, current_balance)
+
+    # Apply the optimal configuration
+    trading_bot.config = TradingConfig(**optimal_config)
+
+    # Connect and subscribe to live ticks (if token provided)
     await deriv_client.connect_and_subscribe_ticks()
     trading_bot.is_trading = True
-    logging.info(f"Trading started. Live mode: {deriv_client.is_connected}")
+
+    logging.info(f"🤖 AI-Optimized Trading Started!")
+    logging.info(f"📊 Market Analysis: {market_analysis}")
+    logging.info(f"⚙️ Optimal Config Applied: {optimal_config}")
+    logging.info(f"💰 Live Mode: {deriv_client.is_connected}")
+
+    return {
+        "status": "success",
+        "mode": "live" if deriv_client.is_connected else "simulation",
+        "market_analysis": market_analysis,
+        "optimal_config": optimal_config,
+        "message": "AI-optimized trading configuration applied"
+    }
+
+
+@app.post("/api/trading/start-manual")
+async def start_manual_trading():
+    """Start trading with current manual configuration (no AI optimization)"""
+    # Connect and subscribe to live ticks (if token provided)
+    await deriv_client.connect_and_subscribe_ticks()
+    trading_bot.is_trading = True
+
+    logging.info(f"Manual trading started. Live mode: {deriv_client.is_connected}")
     return {"status": "success", "mode": "live" if deriv_client.is_connected else "simulation"}
+
+
+@app.get("/api/trading/ai-analysis")
+async def get_ai_analysis():
+    """Get AI analysis and recommended configuration"""
+    current_balance = deriv_client.balance or 1000
+    market_analysis = analyze_market_conditions()
+    optimal_config = get_optimal_trading_config(market_analysis, current_balance)
+
+    return {
+        "market_analysis": market_analysis,
+        "recommended_config": optimal_config,
+        "current_config": trading_bot.config.model_dump() if trading_bot.config else None,
+        "balance": current_balance
+    }
 
 
 @app.post("/api/trading/stop")
